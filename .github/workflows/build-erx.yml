@@ -1,0 +1,115 @@
+name: Build EdgeRouter X ImmortalWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'ImmortalWrt 源码分支 (推荐 openwrt-23.05 以支持从 18.06 网页直接升级)'
+        required: true
+        default: 'openwrt-23.05'
+  schedule:
+    # 每月 1 日北京时间凌晨 02:00 (UTC 18:00) 自动拉取最新源码与插件编译
+    - cron: '0 18 1 * *'
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-23.05
+  CONFIG_FILE: erx.config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Prepare Build Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+            git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+            libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
+            mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
+            libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
+            vim wget xmlto xxd zlib1g-dev
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          df -h
+
+      - name: 3. Clone ImmortalWrt Source
+        run: |
+          BRANCH="${{ github.event.inputs.branch || env.REPO_BRANCH }}"
+          git clone --depth 1 -b "$BRANCH" "$REPO_URL" openwrt
+
+      - name: 4. Load Custom Feeds (diy-part1.sh)
+        run: |
+          chmod +x $DIY_P1_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+
+      - name: 5. Update & Install Feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 6. Apply Custom Configuration (diy-part2.sh & erx.config)
+        run: |
+          chmod +x $DIY_P2_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P2_SH
+          cp $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          make defconfig
+
+      - name: 7. Download Packages
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 8. Compile Firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          echo "FILE_DATE=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
+
+      - name: 9. Organize Firmware Artifacts
+        run: |
+          cd openwrt/bin/targets/ramips/mt7621
+          cp $GITHUB_WORKSPACE/openwrt/.config ./build.config
+          rm -rf packages
+          ls -lh
+          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+      - name: 10. Upload Firmware to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ER-X-${{ env.FILE_DATE }}
+          name: EdgeRouter X ImmortalWrt (${{ env.FILE_DATE }})
+          body: |
+            ### EdgeRouter X (MT7621) ImmortalWrt 自动编译固件
+            - **源码分支**: `${{ github.event.inputs.branch || env.REPO_BRANCH }}`
+            - **集成科学上网插件**: `HomeProxy`、`PassWall2`、`SSR-Plus` (共用最新 `Sing-box` 与 `Xray-core` 内核)
+            - **硬件加速与主题**: 默认开启 `MT7621 硬件流量分载 (HWNAT)`，默认主题为 `Argon`
+            - **常用附加插件**: DDNS、UPnP、网络唤醒 (WoL)、Watchcat、TTYD 终端、内存释放、定时重启
+            
+            #### 刷机与升级说明（重要）
+            - **升级文件**: 请下载 `immortalwrt-ramips-mt7621-ubnt_edgerouter-x-squashfs-sysupgrade.bin`
+            - **从 18.06 网页直接升级必读**:
+              1. 登录当前 LuCI 后台 -> **系统 (System)** -> **备份/升级 (Backup / Flash Firmware)** -> **刷写新的固件 (Flash new firmware image)**。
+              2. 上传 `*-squashfs-sysupgrade.bin` 后，**务必取消勾选「保留配置 (Keep settings)」**（因为 18.06 使用旧版 `swconfig` 交换机架构和 `fw3`，而 23.05 使用全新的 `DSA` 架构和 `fw4 nftables`，保留旧配置会导致网络配置冲突无法联网）。
+              3. 如果页面提示设备型号从 `ubnt-erx` 变更为 `ubnt,edgerouter-x` 的校验警告，请**勾选「强制升级 (Force upgrade)」**后确认刷入，等待约 3 分钟重启即可通过 `192.168.1.1` 访问。
+              4. 以后在 `23.05` 同分支内每月升级新固件时，即可正常勾选「保留配置」直接升级。
+          files: ${{ env.FIRMWARE_PATH }}/*
