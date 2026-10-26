@@ -40,7 +40,7 @@ jobs:
             bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
             git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
             libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
-            mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
+            genisoimage msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
             libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip \
             vim wget xmlto xxd zlib1g-dev
           sudo -E apt-get -qq autoremove --purge
@@ -82,7 +82,7 @@ jobs:
       - name: 8. Compile Firmware
         run: |
           cd openwrt
-          make -j$(nproc) || make -j1 || make -j1 V=s
+          make -j$(nproc) || make -j1 V=s
           echo "FILE_DATE=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_ENV
 
       - name: 9. Organize Firmware Artifacts
@@ -95,15 +95,17 @@ jobs:
 
       - name: 10. Upload Firmware to GitHub Release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ER-X-${{ env.FILE_DATE }}
           name: EdgeRouter X ImmortalWrt (${{ env.FILE_DATE }})
           body: |
             ### EdgeRouter X (MT7621) ImmortalWrt 自动编译固件
             - **源码分支**: `${{ github.event.inputs.branch || env.REPO_BRANCH }}`
-            - **集成科学上网插件**: `HomeProxy`、`PassWall2`、`SSR-Plus` (共用最新 `Sing-box` 与 `Xray-core` 内核)
+            - **集成插件**: `SSR-Plus` (纯 C/Go 高性能无 Rust 组合)、`PassWall2`、`HomeProxy`
             - **硬件加速与主题**: 默认开启 `MT7621 硬件流量分载 (HWNAT)`，默认主题为 `Argon`
-            - **常用附加插件**: DDNS、UPnP、网络唤醒 (WoL)、Watchcat、TTYD 终端、内存释放、定时重启
+            - **常用附加插件**: DDNS、DDNS-Go、UPnP、网络唤醒 (WoL)、Watchcat、TTYD 终端、内存释放、定时重启
             
             #### 刷机与升级说明（重要）
             - **升级文件**: 请下载 `immortalwrt-ramips-mt7621-ubnt_edgerouter-x-squashfs-sysupgrade.bin`
